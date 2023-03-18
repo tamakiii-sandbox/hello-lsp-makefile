@@ -1,15 +1,24 @@
 use async_std::io::{stdin, stdout};
 use async_std::prelude::*;
-use futures::io::{AsyncBufReadExt, AsyncWriteExt};
-use lsp_types::{DidOpenTextDocumentParams, InitializeParams, InitializeResult, ResponseError, ServerCapabilities, TextDocumentItem};
-use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
+use lsp_types::{DidOpenTextDocumentParams, InitializeParams, InitializeResult, ServerCapabilities, TextDocumentItem};
+use lsp_types::ResponseError;
+use lsp_types::request::Request;
 use serde_json::Value;
+use serde_json::json;
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+#[serde(tag = "method", content = "params")]
+enum SupportedRequest {
+    Initialize(InitializeParams),
+    // Add other supported requests here
+}
 
 async fn async_main() {
     let stdin = stdin();
     let stdout = stdout();
-    let (mut reader, mut writer) = (stdin.lock(), stdout.lock());
+    let (reader, writer) = (BufReader::new(stdin), BufWriter::new(stdout));
 
     while let Some(message) = read_message(&mut reader).await {
         // JSON-RPCメッセージを処理する関数を呼び出します。
@@ -17,7 +26,7 @@ async fn async_main() {
     }
 }
 
-async fn read_message(reader: &mut impl AsyncBufReadExt) -> Option<Value> {
+async fn read_message(reader: &mut (impl AsyncBufReadExt + Unpin)) -> Option<Value> {
     let mut content_length = None;
     let mut buf = String::new();
 
@@ -25,7 +34,7 @@ async fn read_message(reader: &mut impl AsyncBufReadExt) -> Option<Value> {
         buf.clear();
         let _ = reader.read_line(&mut buf).await;
         if let Some(len) = buf.strip_prefix("Content-Length: ") {
-            content_length = usize::from_str(len.trim()).ok();
+            content_length = usize::from_str_radix(len.trim(), 10).ok();
         }
     }
 
@@ -37,10 +46,10 @@ async fn read_message(reader: &mut impl AsyncBufReadExt) -> Option<Value> {
 }
 
 async fn process_message(writer: &mut impl AsyncWriteExt, message: Value) {
-    let request: Request = serde_json::from_value(message).unwrap();
+    let request: SupportedRequest = serde_json::from_value(message).unwrap();
 
-    match request.method.as_str() {
-        "initialize" => {
+    match request {
+        SupportedRequest::Initialize(params) => {
             let params: InitializeParams = serde_json::from_value(request.params).unwrap();
             // ここで、サーバーの初期化処理を行います。
             let server_capabilities = ServerCapabilities {
@@ -80,12 +89,12 @@ async fn process_message(writer: &mut impl AsyncWriteExt, message: Value) {
             write_message(writer, request.id, response).await;
         }
         "textDocument/didOpen" => {
-            let params: DidOpenTextDocumentParams = serde_json::from_value(notification.params).unwrap();
+            let params: DidOpenTextDocumentParams = serde_json::from_value(message["params"].clone()).unwrap();
             let document: TextDocumentItem = params.text_document;
             // ここで、ドキュメントが開かれたときの処理を行います。
         }
         _ => {
-            let error = ErrorMessage {
+            let error = ResponseError {
                 code: -32601, // Method not found
                 message: "Method not found".to_string(),
                 data: None,
@@ -96,7 +105,7 @@ async fn process_message(writer: &mut impl AsyncWriteExt, message: Value) {
     }
 }
 
-async fn write_message(writer: &mut impl AsyncWriteExt, id: Value, result: Value) {
+async fn write_message(writer: &mut (impl AsyncWriteExt + Unpin), id: Value, result: Value) {
     let message = json!({
         "jsonrpc": "2.0",
         "id": id,
@@ -111,6 +120,7 @@ async fn write_message(writer: &mut impl AsyncWriteExt, id: Value, result: Value
 }
 
 fn main() {
+    use tokio::runtime::Builder;
     let rt = Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
