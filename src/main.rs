@@ -1,11 +1,10 @@
-use tokio::runtime::Builder;
-use tokio::io::{stdin, stdout, AsyncBufReadExt, AsyncWriteExt};
-use lsp_types::{Notification, Request};
+use async_std::io::{stdin, stdout};
 use async_std::prelude::*;
+use futures::io::{AsyncBufReadExt, AsyncWriteExt};
+use lsp_types::{DidOpenTextDocumentParams, InitializeParams, InitializeResult, ResponseError, ServerCapabilities, TextDocumentItem};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::str::FromStr;
-use lsp_types::{ErrorMessage, InitializeParams, InitializeResult, ServerCapabilities};
-use serde_json::json;
+
 
 async fn async_main() {
     let stdin = stdin();
